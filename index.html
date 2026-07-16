@@ -165,9 +165,28 @@
   nav.bottom-nav button.active { color: var(--accent); font-weight: 600; }
 
   /* Training screen */
-  .train-header { text-align: center; margin-bottom: 8px; }
+  .train-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .train-header-text { flex: 1; text-align: center; }
   .train-header .name { font-size: 1.2rem; font-weight: 600; }
   .train-header .targets { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+  .pause-spacer { width: 32px; flex-shrink: 0; }
+  .pause-btn {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--fg);
+    font-size: 0.85rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pause-btn.paused { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pause-btn:disabled { opacity: 0.3; }
+  #toggle-btn:disabled { opacity: 0.5; }
 
   .ring-wrap {
     position: relative;
@@ -377,8 +396,12 @@
       </div>
       <div id="train-content">
         <div class="train-header">
-          <div class="name" id="train-name">-</div>
-          <div class="targets" id="train-targets"></div>
+          <div class="pause-spacer"></div>
+          <div class="train-header-text">
+            <div class="name" id="train-name">-</div>
+            <div class="targets" id="train-targets"></div>
+          </div>
+          <button id="pause-btn" class="pause-btn" title="Pause session">&#9208;</button>
         </div>
 
         <div class="ring-wrap">
@@ -481,6 +504,8 @@
   function round1(n) { return Math.round(n * 10) / 10; }
 
   var current = loadCurrent() || { phase: "idle", phaseStartTs: null, reps: [], pendingSessionId: null, setStartTs: null };
+  if (current.paused === undefined) current.paused = false;
+  if (current.pauseStartTs === undefined) current.pauseStartTs = null;
   var lastVibratedPhase = null;
 
   // ---------- Navigation ----------
@@ -585,6 +610,7 @@
   }
 
   function handleToggle() {
+    if (current.paused) return;
     var settings = loadSettings();
     if (!settings) return;
     var now = Date.now();
@@ -619,6 +645,30 @@
   }
   toggleBtn.addEventListener("click", handleToggle);
 
+  var pauseBtn = document.getElementById("pause-btn");
+  function handlePauseToggle() {
+    if (current.phase === "idle") return;
+    var now = Date.now();
+    if (current.paused) {
+      current.phaseStartTs += now - current.pauseStartTs;
+      current.paused = false;
+      current.pauseStartTs = null;
+    } else {
+      current.paused = true;
+      current.pauseStartTs = now;
+    }
+    saveCurrent(current);
+    renderTrain();
+  }
+  pauseBtn.addEventListener("click", handlePauseToggle);
+
+  function updatePauseButton() {
+    pauseBtn.disabled = current.phase === "idle";
+    pauseBtn.classList.toggle("paused", current.paused);
+    pauseBtn.innerHTML = current.paused ? "&#9654;" : "&#9208;";
+    pauseBtn.title = current.paused ? "Resume session" : "Pause session";
+  }
+
   function vibrateCue() {
     if (navigator.vibrate) navigator.vibrate(150);
   }
@@ -652,6 +702,8 @@
 
     document.getElementById("daily-banner").style.display = setsToday >= settings.setsPerDay ? "block" : "none";
 
+    updatePauseButton();
+    toggleBtn.disabled = current.paused;
     updateTimerDisplay(settings);
   }
 
@@ -660,11 +712,12 @@
     if (!settings) return;
     var phase = current.phase;
     var isRest = phase === "rest";
-    var elapsed = phase === "idle" ? 0 : (Date.now() - current.phaseStartTs) / 1000;
+    var nowRef = current.paused ? current.pauseStartTs : Date.now();
+    var elapsed = phase === "idle" ? 0 : (nowRef - current.phaseStartTs) / 1000;
     var target = isRest ? settings.restSec : settings.activeSec;
     var reached = phase !== "idle" && elapsed >= target;
 
-    phaseLabelEl.textContent = phase === "idle" ? "Ready" : (isRest ? "Rest" : "Active");
+    phaseLabelEl.textContent = phase === "idle" ? "Ready" : (current.paused ? "Paused" : (isRest ? "Rest" : "Active"));
     timerDisplayEl.textContent = elapsed.toFixed(1) + "s";
     actionLabelEl.textContent = phase === "active" ? "End" : "Start";
 
@@ -677,7 +730,7 @@
     var ratio = phase === "idle" ? 0 : Math.min(1, elapsed / target);
     ringProgressEl.style.strokeDashoffset = RING_CIRC * (1 - ratio);
 
-    if (reached && lastVibratedPhase !== phase) {
+    if (reached && !current.paused && lastVibratedPhase !== phase) {
       vibrateCue();
       lastVibratedPhase = phase;
     }
